@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
+  base: '/ModuleC-Docs/',
   title: 'Module C — RESTful API',
   description: 'คู่มือสร้าง Music Album RESTful API ด้วย Node.js + Express + MySQL ตั้งแต่ศูนย์',
   lang: 'th',
