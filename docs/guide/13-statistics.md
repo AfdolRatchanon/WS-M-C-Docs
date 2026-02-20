@@ -95,7 +95,7 @@ router.get('/', async (req, res) => {
     const labelsFilter = req.query.labels; // optional: filter by label name
 
     if (!metrics || !['song', 'album', 'label'].includes(metrics)) {
-      return res.status(400).json({ error: 'metrics must be one of: song, album, label' });
+      return res.status(400).json({ success: false, message: 'Validation failed' });
     }
 
     let data;
@@ -213,7 +213,7 @@ router.get('/', async (req, res) => {
     return res.status(200).json({ success: true, data });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: 'Internal server error.' });
+    return res.status(500).json({ success: false, message: 'Internal server error.' });
   }
 });
 
@@ -443,7 +443,66 @@ Loop ผ่านแต่ละ label แล้ว query เพลงแยก 
 
 ::: details ✅ ผลลัพธ์ (400 Bad Request)
 ```json
-{ "error": "metrics must be one of: song, album, label" }
+{ "success": false, "message": "Validation failed" }
+```
+:::
+
+## `app.js` Final — โปรเจ็คสมบูรณ์
+
+::: details 📄 app.js สมบูรณ์ (Final — หลัง Step 13)
+```js
+require('dotenv').config()
+const express = require('express')
+const cors = require('cors')
+const path = require('path')
+const authRoutes = require('./routes/auth')
+const albumRoutes = require('./routes/albums')
+const songRoutes = require('./routes/songs')
+const userRoutes = require('./routes/users')
+const statisticsRoutes = require('./routes/statistics')
+
+const app = express()
+const PORT = process.env.PORT || 3000
+
+// ─── Middleware ───────────────────────────────────────────
+app.use(cors())
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+
+// ─── Routes ───────────────────────────────────────────────
+app.use('/api', authRoutes)
+app.use('/api/albums', albumRoutes)
+app.use('/api/songs', songRoutes)
+app.use('/api/users', userRoutes)
+app.use('/api/statistics', statisticsRoutes)
+
+// Health check — ต้องอยู่ก่อน app.use('/api', songRoutes)
+app.get('/api', (_req, res) => {
+  res.json({ message: 'Module C - Music Album RESTful API is running.' })
+})
+
+// Mount song routes สำหรับ /api/albums/:albumId/songs endpoints
+app.use('/api', songRoutes)
+
+// ─── 404 Handler ──────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ success: false, message: 'Not Found' })
+})
+
+// ─── Error Handling ───────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error(err.stack)
+  if (err.message && err.message.includes('Only image files')) {
+    return res.status(400).json({ success: false, message: 'Invalid file type' })
+  }
+  res.status(500).json({ success: false, message: 'Internal server error.' })
+})
+
+// ─── Start Server ─────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`)
+})
 ```
 :::
 

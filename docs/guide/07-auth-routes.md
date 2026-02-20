@@ -85,8 +85,8 @@ const formData = multer().none()
 
 Flow การ Login มี 4 ขั้นตอน:
 1. **Validate** — ตรวจว่า username + password ส่งมาครบ
-2. **Find user** — หา user ใน DB ถ้าไม่เจอ → 401
-3. **Verify password** — ใช้ `bcrypt.compare()` เทียบกับ hash ใน DB ไม่เจอ → 401
+2. **Find user** — หา user ใน DB ถ้าไม่เจอ → 400
+3. **Verify password** — ใช้ `bcrypt.compare()` เทียบกับ hash ใน DB ไม่ตรง → 400
 4. **Check ban** — ถ้าถูก ban → 403 แล้วสร้าง token + บันทึกลง DB
 
 ::: tip 💡 ทำไม error message ของ username ผิดและ password ผิดเป็นข้อความเดียวกัน?
@@ -101,13 +101,13 @@ router.post('/login', formData, async (req, res) => {
 
     // 1. ตรวจข้อมูลครบไหม
     if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     // 2. หา user จาก DB
     const [users] = await db.query('SELECT * FROM users WHERE username = ?', [username])
     if (users.length === 0) {
-      return res.status(401).json({ error: 'Invalid username or password.' })
+      return res.status(400).json({ success: false, message: 'Login failed' })
     }
 
     const user = users[0]
@@ -115,12 +115,12 @@ router.post('/login', formData, async (req, res) => {
     // 3. เทียบ password กับ hash ใน DB
     const isMatch = await bcrypt.compare(password, user.password_hash)
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid username or password.' })
+      return res.status(400).json({ success: false, message: 'Login failed' })
     }
 
-    // 4. เช็คว่าถูก ban ไหม
+    // 4. เช็คว่าถูก ban ไหม (ตรวจหลัง password เพื่อป้องกัน timing attack)
     if (user.is_banned) {
-      return res.status(403).json({ error: 'Your account has been banned.' })
+      return res.status(403).json({ success: false, message: 'User is banned' })
     }
 
     // สร้าง token (MD5 ของ username) แล้วบันทึกลง DB
@@ -128,18 +128,22 @@ router.post('/login', formData, async (req, res) => {
     await db.query('UPDATE users SET token = ? WHERE user_id = ?', [token, user.user_id])
 
     return res.status(200).json({
-      message: 'Login successful.',
-      token: token,
-      user: {
-        user_id: user.user_id,
-        username: user.username,
-        email: user.email,
-        role: user.role
+      success: true,
+      data: {
+        token,
+        user: {
+          id: user.user_id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          created_at: user.created_at,
+          updated_at: user.updated_at,
+        }
       }
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -160,39 +164,58 @@ router.post('/register', formData, async (req, res) => {
   try {
     const { username, email, password } = req.body
 
-    // 1. ตรวจข้อมูลครบไหม
+    // 1. ตรวจข้อมูลครบไหม + ตรวจรูปแบบ email
     if (!username || !email || !password) {
-      return res.status(400).json({ error: 'Username, email, and password are required.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
-    // 2. เช็ค username / email ซ้ำ
-    const [existing] = await db.query(
-      'SELECT * FROM users WHERE username = ? OR email = ?',
-      [username, email]
-    )
-    if (existing.length > 0) {
-      return res.status(409).json({ error: 'Username or email already exists.' })
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
-    // 3. hash password ก่อนบันทึกเสมอ
-    const password_hash = await bcrypt.hash(password, 12)
+    // 2. เช็ค username ซ้ำ (แยก query เพื่อให้ error message ต่างกัน)
+    const [byUsername] = await db.query('SELECT user_id FROM users WHERE username = ?', [username])
+    if (byUsername.length > 0) {
+      return res.status(409).json({ success: false, message: 'Username already taken' })
+    }
+
+    // 3. เช็ค email ซ้ำ
+    const [byEmail] = await db.query('SELECT user_id FROM users WHERE email = ?', [email])
+    if (byEmail.length > 0) {
+      return res.status(409).json({ success: false, message: 'Email already taken' })
+    }
+
+    // 4. hash password ก่อนบันทึกเสมอ
+    const salt = await bcrypt.genSalt(12)
+    const password_hash = await bcrypt.hash(password, salt)
     const [result] = await db.query(
       'INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)',
       [username, password_hash, email, 'user']
     )
 
+    const [newUser] = await db.query(
+      'SELECT user_id, username, email, role, created_at, updated_at FROM users WHERE user_id = ?',
+      [result.insertId]
+    )
+
+    const u = newUser[0]
     return res.status(201).json({
-      message: 'User registered successfully.',
-      user: {
-        user_id: result.insertId,
-        username: username,
-        email: email,
-        role: 'user'
+      success: true,
+      data: {
+        user: {
+          id: u.user_id,
+          username: u.username,
+          email: u.email,
+          role: u.role,
+          created_at: u.created_at,
+          updated_at: u.updated_at,
+        }
       }
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -259,13 +282,17 @@ app.listen(PORT, () => {
 ::: details ✅ ผลลัพธ์ที่ถูกต้อง (200 OK)
 ```json
 {
-  "message": "Login successful.",
-  "token": "24c9e15e52afc47c225b757e7bee1f9d",
-  "user": {
-    "user_id": 2,
-    "username": "user1",
-    "email": "user1@web.wsa",
-    "role": "user"
+  "success": true,
+  "data": {
+    "token": "24c9e15e52afc47c225b757e7bee1f9d",
+    "user": {
+      "id": 2,
+      "username": "user1",
+      "email": "user1@web.wsa",
+      "role": "user",
+      "created_at": "2025-11-13T01:41:32.000Z",
+      "updated_at": "2025-11-13T01:56:28.000Z"
+    }
   }
 }
 ```
@@ -274,7 +301,10 @@ app.listen(PORT, () => {
 
 ### ทดสอบ Login ผิด password
 
-เปลี่ยน password เป็น `wrongpass` → ควรได้ **401 Unauthorized**
+เปลี่ยน password เป็น `wrongpass` → ควรได้ **400 Bad Request**:
+```json
+{ "success": false, "message": "Login failed" }
+```
 
 ### ทดสอบ Register
 
@@ -290,18 +320,25 @@ app.listen(PORT, () => {
 ::: details ✅ ผลลัพธ์ที่ถูกต้อง (201 Created)
 ```json
 {
-  "message": "User registered successfully.",
-  "user": {
-    "user_id": 5,
-    "username": "user4",
-    "email": "user4@web.com",
-    "role": "user"
+  "success": true,
+  "data": {
+    "user": {
+      "id": 5,
+      "username": "user4",
+      "email": "user4@web.com",
+      "role": "user",
+      "created_at": "2025-11-20T10:00:00.000Z",
+      "updated_at": "2025-11-20T10:00:00.000Z"
+    }
   }
 }
 ```
 :::
 
-กด Send ซ้ำอีกครั้งด้วยข้อมูลเดิม → ควรได้ **409 Conflict**
+กด Send ซ้ำอีกครั้งด้วยข้อมูลเดิม → ควรได้ **409 Conflict**:
+```json
+{ "success": false, "message": "Username already taken" }
+```
 
 ---
 

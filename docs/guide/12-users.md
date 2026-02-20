@@ -60,8 +60,25 @@ function getLastParam(value) {
 // ─── GET /users — รายชื่อ user ทั้งหมด ─────────────────────
 router.get('/', authenticate, adminOnly, async (req, res) => {
   try {
-    let limit = parseInt(getLastParam(req.query.limit)) || 10
+    const limitRaw = getLastParam(req.query.limit)
     const cursorStr = getLastParam(req.query.cursor)
+
+    // ตรวจ limit: ต้องเป็นจำนวนเต็ม 1–100
+    if (limitRaw !== undefined) {
+      const n = Number(limitRaw)
+      if (!Number.isInteger(n) || n < 1 || n > 100) {
+        return res.status(400).json({ success: false, message: 'Invalid parameter' })
+      }
+    }
+    const limit = parseInt(limitRaw) || 10
+
+    // ตรวจ cursor format
+    if (cursorStr) {
+      const cursor = parseCursor(cursorStr)
+      if (!cursor) {
+        return res.status(400).json({ success: false, message: 'Invalid cursor' })
+      }
+    }
 
     let conditions = []
     let params = []
@@ -104,7 +121,7 @@ router.get('/', authenticate, adminOnly, async (req, res) => {
     return res.status(200).json({ success: true, data, meta })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -112,11 +129,24 @@ router.get('/', authenticate, adminOnly, async (req, res) => {
 router.put('/:id', authenticate, adminOnly, async (req, res) => {
   try {
     const [users] = await db.query('SELECT * FROM users WHERE user_id = ?', [req.params.id])
-    if (users.length === 0) return res.status(404).json({ error: 'User not found.' })
+    if (users.length === 0) return res.status(404).json({ success: false, message: 'User not found' })
 
     const { role } = req.body
     if (!role || !['admin', 'publisher', 'user'].includes(role)) {
-      return res.status(400).json({ error: 'Valid role is required (admin, publisher, user).' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
+    }
+
+    // ห้าม update role ของ user ที่ถูก ban
+    if (users[0].is_banned) {
+      return res.status(409).json({ success: false, message: 'Banned user update failed' })
+    }
+
+    // ห้าม demote admin คนสุดท้าย
+    if (users[0].role === 'admin' && role !== 'admin') {
+      const [adminCount] = await db.query('SELECT COUNT(*) AS cnt FROM users WHERE role = "admin"')
+      if (adminCount[0].cnt <= 1) {
+        return res.status(403).json({ success: false, message: 'Last admin demotion forbidden' })
+      }
     }
 
     await db.query('UPDATE users SET role = ? WHERE user_id = ?', [role, req.params.id])
@@ -140,7 +170,7 @@ router.put('/:id', authenticate, adminOnly, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -149,14 +179,20 @@ router.put('/:id/ban', authenticate, adminOnly, async (req, res) => {
   try {
     // ป้องกัน admin ban ตัวเอง
     if (req.user.user_id === parseInt(req.params.id)) {
-      return res.status(400).json({ error: 'You cannot ban yourself.' })
+      return res.status(400).json({ success: false, message: 'Cannot ban self' })
     }
 
     const [users] = await db.query('SELECT * FROM users WHERE user_id = ?', [req.params.id])
-    if (users.length === 0) return res.status(404).json({ error: 'User not found.' })
+    if (users.length === 0) return res.status(404).json({ success: false, message: 'User not found' })
 
+    // ห้าม ban admin ด้วยกัน
+    if (users[0].role === 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot ban another admin' })
+    }
+
+    // ถ้า ban อยู่แล้ว → validation failed
     if (users[0].is_banned) {
-      return res.status(400).json({ error: 'User is already banned.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     // ลบ token ด้วย — user จะถูกบังคับออกจากระบบทันที
@@ -183,7 +219,7 @@ router.put('/:id/ban', authenticate, adminOnly, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -191,10 +227,11 @@ router.put('/:id/ban', authenticate, adminOnly, async (req, res) => {
 router.put('/:id/unban', authenticate, adminOnly, async (req, res) => {
   try {
     const [users] = await db.query('SELECT * FROM users WHERE user_id = ?', [req.params.id])
-    if (users.length === 0) return res.status(404).json({ error: 'User not found.' })
+    if (users.length === 0) return res.status(404).json({ success: false, message: 'User not found' })
 
+    // ถ้าไม่ได้ ban อยู่ → validation failed
     if (!users[0].is_banned) {
-      return res.status(400).json({ error: 'User is not banned.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     await db.query('UPDATE users SET is_banned = 0 WHERE user_id = ?', [req.params.id])
@@ -217,7 +254,7 @@ router.put('/:id/unban', authenticate, adminOnly, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -265,13 +302,18 @@ app.get('/api', (_req, res) => {
 // Mount song routes สำหรับ /api/albums/:id/songs endpoints
 app.use('/api', songRoutes)
 
+// ─── 404 Handler ──────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ success: false, message: 'Not Found' })
+})
+
 // ─── Error Handling ───────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error(err.stack)
   if (err.message && err.message.includes('Only image files')) {
-    return res.status(400).json({ error: err.message })
+    return res.status(400).json({ success: false, message: 'Invalid file type' })
   }
-  res.status(500).json({ error: 'Internal server error.' })
+  res.status(500).json({ success: false, message: 'Internal server error.' })
 })
 
 // ─── Start Server ─────────────────────────────────────────
@@ -333,6 +375,13 @@ app.listen(PORT, () => {
 ```
 :::
 
+### ทดสอบ Demote Admin คนสุดท้าย
+
+ถ้ามี admin แค่คนเดียว ลอง `PUT /api/users/1` + `{ "role": "user" }` → ควรได้ **403 Forbidden**:
+```json
+{ "success": false, "message": "Last admin demotion forbidden" }
+```
+
 ### Ban User
 
 `PUT http://localhost:3000/api/users/2/ban` + token ของ admin
@@ -374,11 +423,18 @@ user2 จะ logout ทันที token ถูกลบ — ลอง login �
 ```
 :::
 
+### ทดสอบ Ban Admin
+
+ลอง ban admin ด้วยกัน: `PUT http://localhost:3000/api/users/<other_admin_id>/ban` → ควรได้ **403 Forbidden**:
+```json
+{ "success": false, "message": "Cannot ban another admin" }
+```
+
 ### ทดสอบ Self-ban
 
 ลอง ban ตัวเอง: `PUT http://localhost:3000/api/users/<admin_id>/ban` ด้วย token ของ admin นั้น → ควรได้ **400 Bad Request**:
 ```json
-{ "error": "You cannot ban yourself." }
+{ "success": false, "message": "Cannot ban self" }
 ```
 
 ### ทดสอบด้วย Non-admin

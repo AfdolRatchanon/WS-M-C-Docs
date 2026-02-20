@@ -46,6 +46,25 @@ const fs = require('fs')
 const upload = require('../middleware/upload')        // สร้างใน Step 10
 const { authenticate, publisherOrAdmin } = require('../middleware/auth')
 
+// ─── Helpers: cursor pagination ────────────────────────────
+function parseCursor(cursorStr) {
+  try {
+    const decoded = Buffer.from(cursorStr, 'base64').toString('utf-8')
+    const parsed = JSON.parse(decoded)
+    if (parsed && typeof parsed.id === 'number') return parsed
+    return null
+  } catch { return null }
+}
+
+function encodeCursor(id) {
+  return Buffer.from(JSON.stringify({ id })).toString('base64')
+}
+
+function getLastParam(value) {
+  if (Array.isArray(value)) return value[value.length - 1]
+  return value
+}
+
 // ─── Helper: sync labels ───────────────────────────────────
 // ลบ labels เดิม แล้วเพิ่มใหม่ตาม labelString (comma-separated)
 async function syncLabels(songId, labelString) {
@@ -70,6 +89,13 @@ async function syncLabels(songId, labelString) {
 ### 2. GET /songs — รายการทั้งหมด + Search
 
 รองรับ `limit`, `cursor` (Cursor Pagination แบบเดียวกับ albums) และ `keyword` สำหรับค้นหาใน `title`
+
+| Query Param | คำอธิบาย |
+|:------------|:---------|
+| `limit` | จำนวนเพลงต่อหน้า (1–100, default: 10) |
+| `cursor` | Cursor สำหรับหน้าถัดไป |
+| `keyword` | ค้นหาใน title (เช่น `?keyword=love`) |
+| `filter[keyword]` | รูปแบบ spec — ค้นหาเหมือนกัน |
 
 ::: tip 💡 `filter[keyword]` คืออะไร?
 Spec กำหนดให้ส่ง keyword ในรูป `?filter[keyword]=love` — Express (qs parser) จะ parse เป็น `req.query.filter.keyword` อัตโนมัติ
@@ -146,7 +172,7 @@ router.get('/', async (req, res) => {
     return res.status(200).json({ success: true, data, meta })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -220,7 +246,7 @@ router.get('/:id', async (req, res) => {
        GROUP BY s.song_id`,
       [req.params.id]
     )
-    if (songs.length === 0) return res.status(404).json({ error: 'Song not found.' })
+    if (songs.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     const s = songs[0]
     const data = {
@@ -243,7 +269,7 @@ router.get('/:id', async (req, res) => {
     return res.status(200).json({ success: true, data })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -284,19 +310,19 @@ router.get('/:id/cover', async (req, res) => {
       'SELECT cover_image_path FROM songs WHERE song_id = ? AND deleted_at IS NULL',
       [req.params.id]
     )
-    if (songs.length === 0) return res.status(404).json({ error: 'Song not found.' })
+    if (songs.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
     if (!songs[0].cover_image_path) {
-      return res.status(404).json({ error: 'No cover image for this song.' })
+      return res.status(404).json({ success: false, message: 'Cover Not Found' })
     }
 
     const imagePath = path.join(__dirname, '..', 'uploads', songs[0].cover_image_path)
     if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({ error: 'Cover image file not found.' })
+      return res.status(404).json({ success: false, message: 'Cover Not Found' })
     }
     return res.sendFile(imagePath)
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -317,10 +343,10 @@ router.post('/albums/:albumId/songs', authenticate, publisherOrAdmin,
     try {
       const { albumId } = req.params
       const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [albumId])
-      if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+      if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
       const { title, duration_seconds, lyrics, label, is_cover } = req.body
-      if (!title) return res.status(400).json({ error: 'Title is required.' })
+      if (!title) return res.status(400).json({ success: false, message: 'Validation failed' })
 
       // กำหนด track_order อัตโนมัติ (ต่อจาก track ล่าสุด)
       const [maxOrder] = await db.query(
@@ -371,7 +397,7 @@ router.post('/albums/:albumId/songs', authenticate, publisherOrAdmin,
       return res.status(201).json({ success: true, data })
     } catch (err) {
       console.error(err)
-      return res.status(500).json({ error: 'Internal server error.' })
+      return res.status(500).json({ success: false, message: 'Internal server error.' })
     }
   }
 )
@@ -396,7 +422,7 @@ router.post('/albums/:albumId/songs/:songId', authenticate, publisherOrAdmin,
         'SELECT * FROM songs WHERE song_id = ? AND album_id = ? AND deleted_at IS NULL',
         [songId, albumId]
       )
-      if (songs.length === 0) return res.status(404).json({ error: 'Song not found in this album.' })
+      if (songs.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
       const { title, duration_seconds, lyrics, label, is_cover } = req.body
       const updates = {}
@@ -453,7 +479,7 @@ router.post('/albums/:albumId/songs/:songId', authenticate, publisherOrAdmin,
       return res.status(200).json({ success: true, data })
     } catch (err) {
       console.error(err)
-      return res.status(500).json({ error: 'Internal server error.' })
+      return res.status(500).json({ success: false, message: 'Internal server error.' })
     }
   }
 )
@@ -477,11 +503,11 @@ router.put('/albums/:albumId/songs/order', authenticate, publisherOrAdmin, async
   try {
     const { albumId } = req.params
     const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [albumId])
-    if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+    if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     const { song_ids } = req.body
     if (!song_ids || !Array.isArray(song_ids)) {
-      return res.status(400).json({ error: 'song_ids array is required.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     // อัปเดต track_order ตามลำดับใน array
@@ -494,7 +520,7 @@ router.put('/albums/:albumId/songs/order', authenticate, publisherOrAdmin, async
     return res.status(200).json({ success: true })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -514,14 +540,14 @@ router.delete('/albums/:albumId/songs/:songId', authenticate, publisherOrAdmin, 
       'SELECT * FROM songs WHERE song_id = ? AND album_id = ? AND deleted_at IS NULL',
       [songId, albumId]
     )
-    if (songs.length === 0) return res.status(404).json({ error: 'Song not found in this album.' })
+    if (songs.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     // Soft Delete: บันทึกเวลาลบ ไม่ลบจริง
     await db.query('UPDATE songs SET deleted_at = NOW() WHERE song_id = ?', [songId])
     return res.status(200).json({ success: true })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -575,13 +601,18 @@ app.get('/api', (_req, res) => {
 // Mount song routes สำหรับ /api/albums/:id/songs endpoints
 app.use('/api', songRoutes)
 
+// ─── 404 Handler ──────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ success: false, message: 'Not Found' })
+})
+
 // ─── Error Handling (จาก Step 10) ─────────────────────────
 app.use((err, req, res, next) => {
   console.error(err.stack)
   if (err.message && err.message.includes('Only image files')) {
-    return res.status(400).json({ error: err.message })
+    return res.status(400).json({ success: false, message: 'Invalid file type' })
   }
-  res.status(500).json({ error: 'Internal server error.' })
+  res.status(500).json({ success: false, message: 'Internal server error.' })
 })
 
 // ─── Start Server ─────────────────────────────────────────

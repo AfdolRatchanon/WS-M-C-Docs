@@ -136,9 +136,9 @@ http://localhost:3000/uploads/1704067200000-123456789.jpg
 app.use((err, req, res, next) => {
   console.error(err.stack)
   if (err.message && err.message.includes('Only image files')) {
-    return res.status(400).json({ error: err.message })
+    return res.status(400).json({ success: false, message: 'Invalid file type' })
   }
-  res.status(500).json({ error: 'Internal server error.' })
+  res.status(500).json({ success: false, message: 'Internal server error.' })
 })
 ```
 
@@ -166,12 +166,20 @@ Express รู้จัก error middleware จากจำนวน parameter �
 ::: details ✅ ผลลัพธ์ (201 Created)
 ```json
 {
-  "message": "Song added successfully.",
-  "song": {
-    "song_id": 21,
+  "success": true,
+  "data": {
+    "id": 21,
+    "album_id": 1,
     "title": "Song with Cover",
-    "cover_image_path": "1704067200000-987654321.jpg",
-    ...
+    "duration_seconds": 200,
+    "lyrics": null,
+    "order": 3,
+    "view_count": 0,
+    "label": [],
+    "is_cover": false,
+    "cover_image_url": "/api/songs/21/cover",
+    "created_at": "2025-11-20T10:00:00.000Z",
+    "updated_at": "2025-11-20T10:00:00.000Z"
   }
 }
 ```
@@ -185,7 +193,7 @@ Express รู้จัก error middleware จากจำนวน parameter �
 
 ลองส่งไฟล์ `.pdf` → ควรได้ **400 Bad Request**:
 ```json
-{ "error": "Only image files (jpg, png, gif) are allowed." }
+{ "success": false, "message": "Invalid file type" }
 ```
 
 ## Glossary

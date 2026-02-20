@@ -46,7 +46,10 @@ const router = express.Router()
 const db = require('../config/database')
 const path = require('path')
 const fs = require('fs')
+const multer = require('multer')
 const { authenticate, publisherOrAdmin } = require('../middleware/auth')
+
+const formData = multer().none()  // parse multipart/form-data ที่มีแค่ text fields
 
 // แปลง cursor string (base64) → object { id }
 function parseCursor(cursorStr) {
@@ -61,6 +64,12 @@ function parseCursor(cursorStr) {
 // แปลง id → cursor string (base64)
 function encodeCursor(id) {
   return Buffer.from(JSON.stringify({ id })).toString('base64')
+}
+
+// ป้องกัน query param ซ้ำ (เช่น ?limit=5&limit=10)
+function getLastParam(value) {
+  if (Array.isArray(value)) return value[value.length - 1]
+  return value
 }
 ```
 
@@ -86,10 +95,42 @@ Route นี้รองรับ 4 query parameters:
 // ─── GET /albums ──────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    let limit = parseInt(req.query.limit) || 10
-    const cursorStr = req.query.cursor
-    const yearFilter = req.query.year
-    const capital = req.query.capital
+    const limitRaw = getLastParam(req.query.limit)
+    const cursorStr = getLastParam(req.query.cursor)
+    const yearFilter = getLastParam(req.query.year)
+    const capital = getLastParam(req.query.capital)
+
+    // ตรวจ limit (1-100)
+    if (limitRaw !== undefined) {
+      const n = Number(limitRaw)
+      if (!Number.isInteger(n) || n < 1 || n > 100) {
+        return res.status(400).json({ success: false, message: 'Invalid parameter' })
+      }
+    }
+    const limit = parseInt(limitRaw) || 10
+
+    // ตรวจ cursor format
+    if (cursorStr) {
+      const cursor = parseCursor(cursorStr)
+      if (!cursor) {
+        return res.status(400).json({ success: false, message: 'Invalid cursor' })
+      }
+    }
+
+    // ตรวจ year format (YYYY หรือ YYYY-YYYY)
+    if (yearFilter) {
+      if (yearFilter.includes('-')) {
+        const parts = yearFilter.split('-')
+        const [s, e] = parts.map(p => p.trim())
+        if (!/^\d{4}$/.test(s) || !/^\d{4}$/.test(e) || parseInt(s) > parseInt(e)) {
+          return res.status(400).json({ success: false, message: 'Invalid year format' })
+        }
+      } else {
+        if (!/^\d{4}$/.test(yearFilter.trim())) {
+          return res.status(400).json({ success: false, message: 'Invalid year format' })
+        }
+      }
+    }
 
     let conditions = []
     let params = []
@@ -141,13 +182,14 @@ router.get('/', async (req, res) => {
     }
 
     // Reshape: nested publisher object, id แทน album_id
+    // ข้อมูล publisher มาจาก JOIN แต่ต้องรวมเป็น nested object ใน response
     const data = rows.map(a => ({
       id: a.album_id,
       title: a.title,
       artist: a.artist,
       release_year: a.release_year,
       publisher: {
-        id: a.pub_id,
+        id: a.pub_id,        // alias จาก SELECT u.user_id AS pub_id
         username: a.pub_username,
         email: a.pub_email,
       },
@@ -160,10 +202,22 @@ router.get('/', async (req, res) => {
     return res.status(200).json({ success: true, data, meta })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
+
+::: tip 💡 Nested Object จาก SQL JOIN
+ผลลัพธ์ JOIN ได้ตาราง "แบน" (flat) เช่น `pub_id`, `pub_username` — ต้อง reshape ให้เป็น nested object ด้วย JavaScript:
+
+```js
+// DB ให้มา (flat)
+{ album_id: 1, title: "Morning Vibes", pub_id: 1, pub_username: "admin" }
+
+// reshape เป็น nested object
+{ id: 1, title: "Morning Vibes", publisher: { id: 1, username: "admin" } }
+```
+:::
 
 ---
 
@@ -187,7 +241,7 @@ router.get('/:id', async (req, res) => {
       [req.params.id]
     )
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'Album not found.' })
+      return res.status(404).json({ success: false, message: 'Not Found' })
     }
 
     const a = rows[0]
@@ -210,7 +264,7 @@ router.get('/:id', async (req, res) => {
     return res.status(200).json({ success: true, data })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -233,7 +287,7 @@ Endpoint แยกต่างหากสำหรับดูเฉพาะ�
 router.get('/:id/songs', async (req, res) => {
   try {
     const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [req.params.id])
-    if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+    if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     const [songs] = await db.query(
       `SELECT s.song_id, s.album_id, s.title, s.duration_seconds,
@@ -266,7 +320,7 @@ router.get('/:id/songs', async (req, res) => {
     return res.status(200).json({ success: true, data })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -314,7 +368,7 @@ Route นี้จึงดึงรูปจาก **เพลงแรก** �
 router.get('/:id/cover', async (req, res) => {
   try {
     const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [req.params.id])
-    if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+    if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     // ดึงรูปปกจากเพลงแรกในอัลบั้มที่มี cover_image_path
     const [songs] = await db.query(
@@ -324,17 +378,17 @@ router.get('/:id/cover', async (req, res) => {
       [req.params.id]
     )
     if (songs.length === 0 || !songs[0].cover_image_path) {
-      return res.status(404).json({ error: 'No cover image found for this album.' })
+      return res.status(404).json({ success: false, message: 'Cover Not Found' })
     }
 
     const imagePath = path.join(__dirname, '..', 'uploads', songs[0].cover_image_path)
     if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({ error: 'Cover image file not found.' })
+      return res.status(404).json({ success: false, message: 'Cover Not Found' })
     }
     return res.sendFile(imagePath)
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -349,11 +403,12 @@ router.get('/:id/cover', async (req, res) => {
 
 ```js
 // ─── POST /albums ─────────────────────────────────────────
-router.post('/', authenticate, publisherOrAdmin, async (req, res) => {
+// formData — parse multipart/form-data เพราะ Postman ส่งเป็น form-data
+router.post('/', authenticate, publisherOrAdmin, formData, async (req, res) => {
   try {
     const { title, artist, release_year, genre, description } = req.body
     if (!title || !artist) {
-      return res.status(400).json({ error: 'Title and artist are required.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     const [result] = await db.query(
@@ -394,7 +449,7 @@ router.post('/', authenticate, publisherOrAdmin, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -412,12 +467,12 @@ router.post('/', authenticate, publisherOrAdmin, async (req, res) => {
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [req.params.id])
-    if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+    if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     const album = albums[0]
     // เฉพาะเจ้าของหรือ admin เท่านั้น
     if (album.publisher_id !== req.user.user_id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden. You can only update your own albums.' })
+      return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
     const { title, artist, release_year, genre, description } = req.body
@@ -429,7 +484,7 @@ router.put('/:id', authenticate, async (req, res) => {
     if (description !== undefined) updates.description = description
 
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'No fields to update.' })
+      return res.status(400).json({ success: false, message: 'Validation failed' })
     }
 
     const setClauses = Object.keys(updates).map(key => `${key} = ?`).join(', ')
@@ -468,7 +523,7 @@ router.put('/:id', authenticate, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -494,11 +549,11 @@ albums           ← ลบสุดท้าย
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     const [albums] = await db.query('SELECT * FROM albums WHERE album_id = ?', [req.params.id])
-    if (albums.length === 0) return res.status(404).json({ error: 'Album not found.' })
+    if (albums.length === 0) return res.status(404).json({ success: false, message: 'Not Found' })
 
     const album = albums[0]
     if (album.publisher_id !== req.user.user_id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Forbidden. You can only delete your own albums.' })
+      return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
     // ลบ related data ก่อน (Foreign Key constraint)
@@ -514,7 +569,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     return res.status(200).json({ success: true })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 
@@ -615,16 +670,15 @@ app.listen(PORT, () => {
 Login ด้วย `admin` (role: admin) ก่อน → ได้ token
 
 1. Method: `POST` | URL: `http://localhost:3000/api/albums`
-2. Headers: `X-Authorization: <admin_token>`
-3. Body → JSON:
-```json
-{
-  "title": "My New Album",
-  "artist": "Test Artist",
-  "release_year": 2024,
-  "genre": "Pop"
-}
-```
+2. Headers: `X-Authorization: Bearer <admin_token>`
+3. Body → **form-data**:
+
+| Key | Value |
+|:----|:------|
+| `title` | `My New Album` |
+| `artist` | `Test Artist` |
+| `release_year` | `2024` |
+| `genre` | `Pop` |
 
 ::: details ✅ ผลลัพธ์ (201 Created)
 ```json

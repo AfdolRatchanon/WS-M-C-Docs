@@ -29,10 +29,9 @@ Module C มอบหมายให้สร้าง **Music Album RESTful API
 | | `PUT /api/users/:id` | เปลี่ยน role ของ user (admin) |
 | | `PUT /api/users/:id/ban` | แบนผู้ใช้ (admin) |
 | | `PUT /api/users/:id/unban` | ปลดแบนผู้ใช้ (admin) |
-| **Statistics** | `GET /api/statistics?metrics=label` | สถิติเพลงตาม Label |
-| | `GET /api/statistics?metrics=album` | สถิติเพลงตาม Album |
-| | `GET /api/statistics?metrics=genre` | สถิติอัลบั้มตาม Genre |
-| | `GET /api/statistics?metrics=popular` | 10 เพลงที่ถูกดูมากที่สุด |
+| **Statistics** | `GET /api/statistics?metrics=song` | เพลงทั้งหมดเรียงตาม view_count |
+| | `GET /api/statistics?metrics=album` | อัลบั้มพร้อม total_view_count |
+| | `GET /api/statistics?metrics=label` | แต่ละ label พร้อมเพลงและ total_view_count |
 
 ### ข้อกำหนดด้าน Security
 

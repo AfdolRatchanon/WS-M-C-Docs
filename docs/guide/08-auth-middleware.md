@@ -42,9 +42,13 @@ const authenticate = async (req, res, next) => {
   const raw = req.headers['x-authorization']
   const token = raw?.startsWith('Bearer ') ? raw.slice(7) : raw
 
+  // ตัวอย่าง:
+  // X-Authorization: Bearer 24c9e15e...  → token = "24c9e15e..."
+  // X-Authorization: 24c9e15e...         → token = "24c9e15e..."
+
   // ไม่มี token → 401
   if (!token) {
-    return res.status(401).json({ error: 'Unauthorized. Token is required.' })
+    return res.status(401).json({ success: false, message: 'Access Token is required' })
   }
 
   try {
@@ -53,21 +57,21 @@ const authenticate = async (req, res, next) => {
 
     // ไม่เจอ → token ผิดหรือหมดอายุ
     if (users.length === 0) {
-      return res.status(401).json({ error: 'Unauthorized. Invalid token.' })
+      return res.status(401).json({ success: false, message: 'Invalid Access Token' })
     }
 
     const user = users[0]
 
     // ถูก ban → 403 Forbidden
     if (user.is_banned) {
-      return res.status(403).json({ error: 'Your account has been banned.' })
+      return res.status(403).json({ success: false, message: 'User is banned' })
     }
 
     // ผ่านหมด! แนบข้อมูล user ไว้ใน req.user ให้ route ถัดไปใช้ได้
     req.user = user
     next()  // ← ส่งต่อให้ middleware/route ถัดไป
   } catch (err) {
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 }
 
@@ -75,7 +79,7 @@ const authenticate = async (req, res, next) => {
 const adminOnly = (req, res, next) => {
   // req.user มาจาก authenticate middleware ที่ต้องรันก่อน
   if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin access required.' })
+    return res.status(403).json({ success: false, message: 'Admin access required' })
   }
   next()
 }
@@ -83,13 +87,22 @@ const adminOnly = (req, res, next) => {
 // ─── publisherOrAdmin — ตรวจว่าเป็น publisher หรือ admin ──
 const publisherOrAdmin = (req, res, next) => {
   if (!req.user || (req.user.role !== 'publisher' && req.user.role !== 'admin')) {
-    return res.status(403).json({ error: 'Forbidden. Publisher or admin access required.' })
+    return res.status(403).json({ success: false, message: 'Access denied' })
   }
   next()
 }
 
 module.exports = { authenticate, adminOnly, publisherOrAdmin }
 ```
+
+::: tip 💡 ทำไม Support ทั้ง Bearer และ token ตรงๆ?
+Spec ของ Module C กำหนดให้ใช้ `X-Authorization: <token>` แบบไม่มี Bearer แต่ทีม Frontend หลายคนชิน `Bearer` จาก JWT — code จึงรองรับทั้งสองรูปแบบเพื่อความยืดหยุ่น
+
+```
+raw?.startsWith('Bearer ') ? raw.slice(7) : raw
+```
+`raw.slice(7)` — ตัดตัวอักษร 7 ตัวแรก ("Bearer ") ออก เหลือแค่ token จริงๆ
+:::
 
 **คำอธิบายสำคัญ:**
 
@@ -127,7 +140,7 @@ router.post('/logout', authenticate, async (req, res) => {
     return res.status(200).json({ success: true })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Internal server error.' })
+    return res.status(500).json({ success: false, message: 'Internal server error.' })
   }
 })
 ```
@@ -156,12 +169,15 @@ router.post('/logout', authenticate, async (req, res) => {
 
 ลอง logout โดยไม่ส่ง Header → ควรได้ **401 Unauthorized**:
 ```json
-{ "error": "Unauthorized. Token is required." }
+{ "success": false, "message": "Access Token is required" }
 ```
 
 ### ทดสอบ Logout ด้วย Token ผิด
 
-ส่ง Header `X-Authorization: wrongtoken` → ควรได้ **401 Unauthorized**
+ส่ง Header `X-Authorization: wrongtoken` → ควรได้ **401 Unauthorized**:
+```json
+{ "success": false, "message": "Invalid Access Token" }
+```
 
 ## Glossary
 
