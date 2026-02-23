@@ -86,6 +86,7 @@ Client ──── API (Node.js) ──── MySQL Database
 - `admin` → password: `adminpass`
 - `user1` → password: `user1pass`
 - `user2` → password: `user2pass`
+- `user3` → password: `user3pass` (ถูกแบนแล้ว — ใช้ทดสอบ 403 Forbidden ได้)
 
 Password ถูก hash ด้วย bcrypt ไว้แล้ว API จะ compare ให้อัตโนมัติ
 :::
@@ -94,11 +95,21 @@ Password ถูก hash ด้วย bcrypt ไว้แล้ว API จะ com
 
 | คำศัพท์ | ความหมาย |
 |:--------|:---------|
+| **XAMPP** | โปรแกรม bundle Apache + MySQL + PHP ใช้สร้าง local server สำหรับ dev |
+| **MySQL** | Relational Database Management System ที่เก็บข้อมูลเป็นตาราง |
+| **phpMyAdmin** | Web UI สำหรับจัดการ MySQL — สร้าง DB, import SQL, ดูข้อมูล ผ่าน browser |
 | **Database** | ที่เก็บข้อมูลแบบมีโครงสร้าง |
 | **Table** | ตารางข้อมูล คล้าย Excel sheet |
 | **Column** | คอลัมน์ในตาราง (เช่น `username`) |
 | **Row** | แถวข้อมูล 1 รายการ |
 | **Primary Key** | คอลัมน์ที่ระบุแถวได้ไม่ซ้ำกัน (เช่น `user_id`) |
+| **AUTO_INCREMENT** | สร้างเลข Primary Key ให้อัตโนมัติ เพิ่มทีละ 1 ทุกครั้งที่ insert |
 | **Foreign Key** | คอลัมน์ที่อ้างอิง Primary Key ของตารางอื่น |
+| **UNIQUE** | Constraint ป้องกันค่าซ้ำในคอลัมน์ — เช่น `username`, `email` ต้องไม่ซ้ำ ถ้าซ้ำ → 409 |
 | **Collation** | การเรียงลำดับตัวอักษร `utf8mb4` รองรับภาษาไทยและ Emoji |
+| **SQL** | ภาษาสำหรับสั่งงาน Relational Database เช่น SELECT, INSERT, UPDATE, DELETE |
 | **Import** | นำข้อมูลจากไฟล์ `.sql` เข้าสู่ฐานข้อมูล |
+| **Normalization** | การออกแบบ DB แยกข้อมูลเป็นหลายตารางเพื่อลดความซ้ำซ้อน |
+| **Many-to-Many** | ความสัมพันธ์ที่ 1 รายการมีได้หลายอีกรายการ — ใช้ตารางกลาง เช่น `song_labels` |
+| **bcrypt** | Algorithm เข้ารหัส password แบบ one-way — ถอดรหัสกลับไม่ได้ ต้อง compare แทน |
+| **Soft Delete** | ลบแบบ "ซ่อน" โดยใส่เวลาใน `deleted_at` แทนการลบจริง — กู้คืนได้ |
